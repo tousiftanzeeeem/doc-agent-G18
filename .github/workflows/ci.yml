@@ -1,0 +1,15 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v1
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check .
+      - run: uv run black --check .
+      - run: uv run mypy src
+      - run: uv run pytest tests/test_structure.py    # structure lock
+      - run: uv run pytest tests/test_contracts.py tests/test_tools.py
+      - run: uv run pytest tests/test_smoke.py         # end-to-end tiny run

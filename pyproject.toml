@@ -1,0 +1,40 @@
+[project]
+name = "doc-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.2,<2.4",
+  "lightning>=2.2,<2.4",
+  "transformers>=4.40,<4.45",
+  "timm>=1.0,<1.1",
+  "datasets>=2.19,<3.0",
+  "torchmetrics>=1.3,<1.5",
+  "sentence-transformers>=2.7,<3.0",
+  "faiss-cpu>=1.8,<1.9",
+  "gymnasium>=0.29,<1.0",
+  "fastapi>=0.111,<0.116",
+  "gradio>=4.31,<5.0",
+  "wandb>=0.17,<0.18",
+  "pydantic>=2.7,<3.0",
+  "pyyaml>=6.0,<7.0",
+  "pydantic-settings>=2.2,<3.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.4", "black>=24.4", "mypy>=1.10", "pytest>=8.2", "pre-commit>=3.7"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+[tool.ruff.lint]
+select = ["E","F","I","N","B","UP"]
+[tool.black]
+line-length = 100
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+ignore_missing_imports = true
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"
+testpaths = ["tests"]

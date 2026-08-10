@@ -1,0 +1,35 @@
+# grading_kit/manifest.yaml — the SINGLE entry point a grader reads.
+# You fill this in. It declares the THREE axes and points to everything
+# needed to reproduce, evaluate, and grade the project. A grader opens
+# ONLY this file; it points to the rest. Build/run scripts and the eval
+# tasks are NAMED here, not copied, so they never go stale.
+
+project_id: ""              # your team id
+
+axes:
+  domain: ""                # your corpus subject / real user (see Roster; one per team)
+  data_speciality: ""       # ONE hard property of your corpus you are handed (see Data-Speciality Catalog)
+                            #   e.g. bangla | arabic | code-switching | degraded-scans | multi-column |
+                            #        handwritten | old-orthography | math-notation | dirty-ocr | ...
+                            #   (English is not a speciality; if your corpus is English, pick a data condition.)
+  primary_nfr: ""           # ONE quality you optimise ABOVE baseline (see NFR sheet). Faithful &
+                            #   accurate are REQUIRED of everyone (baseline), so they are NOT choices.
+  nfr_target: ""            # the concrete target you commit to for that NFR, e.g. "p95 latency <= 300ms",
+                            #   "peak RAM <= 2GB", "ECE <= 0.05", "PII recall >= 0.98"
+
+corpus:
+  path: data/raw/                   # where the scanned page-images live
+  pages: 0                          # total pages  (floor: >= 300)
+  words: 0                          # total words  (floor: >= 60000)
+  provenance: data/provenance.md    # source + licence + counts
+
+heldout:
+  pages_dir: grading_kit/heldout_pages/   # page-images set aside, never OCR-trained on
+  labels:    grading_kit/labels.jsonl     # ground-truth transcriptions for those pages
+
+entrypoints:                          # named, not duplicated (they build/run the real code)
+  build_index: scripts/build_index.sh
+  run_query:   scripts/run.sh
+  eval_tasks:  grading_kit/tasks.jsonl      # authored in A3
+  checker:     grading_kit/success_check.py
+  trace:       traces/run.jsonl              # JSONL trajectory the A3 agentic-feature check reads

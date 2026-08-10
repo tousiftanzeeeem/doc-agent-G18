@@ -1,0 +1,2 @@
+# GENERATED — pin exact versions here via `uv pip compile pyproject.toml -o requirements.lock`
+# Reproducibility gate reads this file. Do not edit by hand.

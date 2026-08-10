@@ -1,0 +1,17 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks: [{id: ruff}, {id: ruff-format}]
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks: [{id: black}]
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks: [{id: mypy, additional_dependencies: ["pydantic>=2.7"]}]
+  - repo: local
+    hooks:
+      - id: structure
+        name: structure-lock
+        entry: pytest tests/test_structure.py
+        language: system
+        pass_filenames: false

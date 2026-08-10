@@ -1,0 +1,7 @@
+# Stage 0 — problem statement (one per group). Set by assignment.
+group_id: "G00"
+domain: "almanacs/panjika"
+data_speciality: "degraded-scans"   # ONE hard corpus property (English is not one)
+primary_nfr: "reproducible"
+nfr_target: "p95 latency <= 300ms"   # your concrete committed target
+corpus: {min_pages: 300, min_words: 60000, source_url: "", license: ""}
