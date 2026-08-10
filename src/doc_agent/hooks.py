@@ -21,7 +21,8 @@ _handlers: dict[str, list[Callable]] = defaultdict(list)
 
 def register(seam: str, handler: Callable) -> None:
     """Attach a handler to a seam. Called by each feature's register() via wiring.py."""
-    assert seam in SEAMS, f"unknown seam {seam}"
+    if seam not in SEAMS:
+        raise ValueError(f"unknown seam {seam}")
     _handlers[seam].append(handler)
 
 def run(seam: str, ctx: dict) -> dict:
