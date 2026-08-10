@@ -1,0 +1,5 @@
+{"id":"t1","question":"","verifiable":true,"judged":false,"gold":"","gold_pages":[],"needs_research":false}
+# One line per eval item. Student-authored, grounded in YOUR corpus.
+# needs_research: true  = a TRIGGER item whose answer is NOT on the top chunk, so the agent MUST re-search.
+#                 false = a CONTROL item answerable from the top chunk (single pass).
+# REQUIRED: at least one {needs_research:true, needs_research:false} PAIR (the A3 agentic gate reads these).

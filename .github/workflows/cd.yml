@@ -1,0 +1,11 @@
+name: cd
+on:
+  push: {branches: [main]}
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t doc-agent .
+      # IMPLEMENT: push image + deploy to HF Spaces (see configs/config.yaml: deploy)

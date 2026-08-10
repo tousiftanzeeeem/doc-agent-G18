@@ -1,0 +1,3 @@
+# structure & contracts owned by course staff
+/src/doc_agent/contracts.py @course-staff
+/STRUCTURE.md @course-staff

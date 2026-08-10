@@ -1,0 +1,10 @@
+name: security
+on: [push, pull_request]
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pip-audit bandit
+      - run: pip-audit -r requirements.lock || true   # dependency CVEs
+      - run: bandit -r src -q                          # code security
