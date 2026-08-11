@@ -1,8 +1,15 @@
 """Stage 1 — load scanned page-images"""
+
 from __future__ import annotations
-from ..contracts import *  # noqa
 
-def load_pages(cfg: dict) -> list[Page]:
-    """Read data/raw/ -> list[Page]. IMPLEMENT."""
-    raise NotImplementedError("Stage 1: load scanned pages")
+import re
+from pathlib import Path
 
+import numpy as np
+
+from ..contracts import Page
+from ..logging_conf import get_logger
+
+log = get_logger("ingest.loader")
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
