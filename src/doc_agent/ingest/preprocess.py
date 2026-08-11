@@ -61,4 +61,41 @@ def _preprocess_one(page: Page, cfg: dict) -> Page:
 
     # keep grayscale for OCR/layout; the binarized mask is derivable on demand
     out_dir = Path(str(cfg.get("out_dir", "data/interim/processed")))
-    return save_image(page, gray, out_dir)    
+    return save_image(page, gray, out_dir)
+
+
+def augment(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Deterministic training augmentation: mild rotation, contrast, blur, erode."""
+    import cv2
+
+    out = img.copy()
+    angle = float(rng.uniform(-2.0, 2.0))
+    if abs(angle) > 0.1:
+        h, w = out.shape[:2]
+        m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+        out = cv2.warpAffine(out, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    if rng.random() < 0.5:
+        out = cv2.convertScaleAbs(
+            out, alpha=float(rng.uniform(0.8, 1.2)), beta=float(rng.uniform(-15, 15))
+        )
+    if rng.random() < 0.3:
+        out = cv2.GaussianBlur(out, (3, 3), 0.5)
+    return out
+
+
+def run(pages: list[Page], cfg: dict) -> list[Page]:
+    """Classical preprocessing (denoise -> binarize -> deskew), cached under interim/processed."""
+    pcfg = dict(cfg.get("preprocess", {}))
+    if not pcfg.get("enabled", True):
+        return pages
+    root = Path(str(cfg.get("data", {}).get("root", "data/raw")))
+    pcfg["out_dir"] = str(root.parent / "interim" / "processed")
+    out = []
+    for page in pages:
+        processed = Path(pcfg["out_dir"]) / f"{page.id}.jpg"
+        if processed.exists():
+            out.append(Page(id=page.id, image_path=str(processed), doc_id=page.doc_id))
+            continue
+        out.append(_preprocess_one(page, pcfg))
+    log.info("preprocessed %d pages", len(out))
+    return out
