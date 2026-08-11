@@ -29,3 +29,36 @@ def _skew_angle(bin_img: np.ndarray) -> float:
     if abs(angle) > 45.0:
         angle = 0.0
     return angle
+
+
+def _preprocess_one(page: Page, cfg: dict) -> Page:
+    import cv2
+
+    img = load_image(page)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    if cfg.get("denoise", True):
+        # fast denoise: Gaussian blur (heavy NL-means is redundant with the enhance stage)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0.8)
+
+    if cfg.get("binarize", True):
+        # Otsu inverse binarization: ink = white, paper = black (contour-friendly)
+        _, bin_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    else:
+        bin_img = gray
+
+    if cfg.get("deskew", True):
+        angle = _skew_angle(bin_img)
+        if abs(angle) > 0.5:
+            h, w = bin_img.shape
+            m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+            bin_img = cv2.warpAffine(
+                bin_img, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT
+            )
+            gray = cv2.warpAffine(
+                gray, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT
+            )
+
+    # keep grayscale for OCR/layout; the binarized mask is derivable on demand
+    out_dir = Path(str(cfg.get("out_dir", "data/interim/processed")))
+    return save_image(page, gray, out_dir)    
