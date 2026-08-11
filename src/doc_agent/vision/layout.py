@@ -101,3 +101,20 @@ def _reading_order(
     for band in sorted(bands):
         ordered.extend(sorted(bands[band], key=lambda b: (b[0], b[1])))
     return ordered
+
+
+def detect(pages: list[Page], cfg: dict) -> list[Region]:
+    """Detect text/table/figure/heading regions across pages."""
+    lcfg = cfg.get("layout", {})
+    regions: list[Region] = []
+    for i, page in enumerate(pages):
+        if (i + 1) % 100 == 0:
+            log.info("layout %d/%d pages", i + 1, len(pages))
+        img = load_image(page)
+        gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        for x, y, bw, bh in _reading_order(_blocks(gray, lcfg), h):
+            kind = _classify(gray, (x, y, bw, bh), h, w)
+            regions.append(Region(page_id=page.id, bbox=(x, y, x + bw, y + bh), kind=kind))
+    log.info("layout: %d regions from %d pages", len(regions), len(pages))
+    return regions
