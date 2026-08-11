@@ -2,7 +2,7 @@
 from __future__ import annotations
 from ..contracts import *  # noqa
 
-def run(pages: list[Page], cfg: dict) -> list[Page]:
-    """Classical preprocessing. IMPLEMENT."""
-    raise NotImplementedError("Stage 1: preprocess")
+# def run(pages: list[Page], cfg: dict) -> list[Page]:
+#     """Classical preprocessing. IMPLEMENT."""
+#     raise NotImplementedError("Stage 1: preprocess")
 
