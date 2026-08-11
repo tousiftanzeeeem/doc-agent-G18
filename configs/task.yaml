@@ -1,7 +1,12 @@
 # Stage 0 — problem statement (one per group). Set by assignment.
-group_id: "G00"
-domain: "almanacs/panjika"
-data_speciality: "degraded-scans"   # ONE hard corpus property (English is not one)
-primary_nfr: "reproducible"
-nfr_target: "p95 latency <= 300ms"   # your concrete committed target
-corpus: {min_pages: 300, min_words: 60000, source_url: "", license: ""}
+group_id: "G18"
+domain: "public-health-history"          # scanned annual sanitary reports of colonial Bengal (1889)
+data_speciality: "degraded-scans"        # ONE hard corpus property: 1890 letterpress on aged paper —
+                                         # foxing, ink bleed-through, uneven inking, no text layer
+primary_nfr: "latency"                   # ONE quality we optimise above baseline (faithful+accurate are baseline)
+nfr_target: "p95 query latency <= 300ms on CPU (flat index, 384-d)"   # concrete committed target
+corpus:
+  min_pages: 300
+  min_words: 60000
+  source_url: "https://archive.org/details/in.ernet.dli.2015.95111"
+  license: "public-domain (published 1890; Internet Archive item, Digital Library of India collection)"
