@@ -1,14 +1,16 @@
 # THE place you set models & parameters. Code reads only from here.
 seed: 42
-device: cuda
+device: cpu                     # CPU-only dev box; set to cuda where available
 
-enhance:   {enabled: true,  model: "unet_small", type: "diffusion"}   # or "vae" / "none"
-layout:    {model: "detectron2:layout", score_thr: 0.5}
-ocr:       {model: "microsoft/trocr-base-printed", finetune: true}    # BASELINE = pretrained OCR
-embed:     {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384}
-index:     {type: "faiss:hnsw", chunk_tokens: 256, overlap: 32}
-retrieve:  {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true, reranker: "cross-encoder/ms-marco-MiniLM-L6-v2"}   # k_step/k_max/weak_threshold drive evidence-gated re-search
-agent:     {max_steps: 8, autonomy: "act-with-approval", budget_usd: 0.05}
-rl:        {algo: "ppo", train_policy: false}                         # bonus: set true
-serve:     {batch: true}
-deploy:    {target: "hf-spaces"}
+data:    {root: data/raw, dpi: 200, max_pages: -1}      # -1 = whole corpus
+preprocess: {enabled: true, denoise: true, binarize: true, deskew: true, augment: false}
+enhance: {enabled: true, model: "clahe_denoise", type: "classical", train: false}   # or "unet_small" (from-scratch denoiser)
+layout:  {model: "heuristic:projection", min_block_h: 20, merge_gap: 14}
+ocr:     {model: "rapidocr:PP-OCRv4-onnx", lang: "en", finetune: false, workers: 3}   # pretrained PP-OCRv4 ONNX (paddleocr blocked by paddlepaddle CPU bug)
+embed:   {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384}
+index:   {type: "numpy:flat", chunk_tokens: 256, overlap: 32}    # exact flat index: deterministic + fast at this scale (no faiss dep)
+retrieve: {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true, reranker: "cross-encoder/ms-marco-MiniLM-L6-v2"}   # drive evidence-gated re-search
+agent:   {max_steps: 8, autonomy: "act-with-approval", budget_usd: 0.05}
+rl:      {algo: "ppo", train_policy: false}                         # bonus: set true
+serve:   {batch: true}
+deploy:  {target: "hf-spaces"}
