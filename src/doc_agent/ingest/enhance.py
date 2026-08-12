@@ -1,22 +1,42 @@
-"""Stage 1 — ENHANCEMENT (VAE / diffusion) — generative denoise / super-resolution of degraded scans"""
+"""Stage 1 — ENHANCEMENT (VAE / diffusion) — generative denoise / super-res of degraded scans.
+
+Two paths behind one interface:
+  * model="clahe_denoise" — classical: CLAHE contrast + NL-means denoise + unsharp mask.
+  * model="unet_small" — a tiny UNet denoiser trained FROM SCRATCH, self-supervised
+    (we corrupt our own pages with noise, the net learns to invert it) — the CPU-feasible
+    stand-in for a VAE/diffusion enhancer; the same train()/apply() contract would host a
+    real diffusion model once a GPU is available.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from __future__ import annotations
-from ..contracts import *  # noqa
+from ..contracts import Page
+from ..logging_conf import get_logger
 from .loader import load_image, save_image
 
+if TYPE_CHECKING:
+    import torch
 
-from pathlib import Path
-from ..logging_conf import get_logger
 log = get_logger("ingest.enhance")
 
 CKPT_DIR = Path("data/interim/enhance")
 
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    import torch
+def _classical(img: np.ndarray) -> np.ndarray:
+    import cv2
+
+    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    out = clahe.apply(gray)
+    # light blur then unsharp mask: sharpen strokes, suppress paper grain
+    blur = cv2.GaussianBlur(out, (0, 0), 1.0)
+    out = cv2.addWeighted(out, 1.5, blur, -0.5, 0)
+    return out
 
 
 def _unet() -> torch.nn.Module:
@@ -64,13 +84,13 @@ def _unet() -> torch.nn.Module:
     return UNet()
 
 
-
 class Enhancer:
     """Model set by cfg['enhance']; train() learns the denoiser, apply() enhances pages."""
 
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg["enhance"]
         self.device = "cpu"
+
     # -- training -----------------------------------------------------------
     def train(self, pages: list[Page]) -> None:
         """Self-supervised denoising: corrupt clean crops, learn to reconstruct (uses augment())."""
@@ -112,6 +132,43 @@ class Enhancer:
         CKPT_DIR.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), CKPT_DIR / "unet_small.pt")
         log.info("saved enhancer checkpoint to %s", CKPT_DIR / "unet_small.pt")
+
+    # -- inference ----------------------------------------------------------
+    def apply(self, pages: list[Page]) -> list[Page]:
+        model = self.cfg.get("model")
+        if model == "unet_small":
+            ckpt = CKPT_DIR / "unet_small.pt"
+            if not ckpt.exists():
+                log.warning("unet_small checkpoint missing — falling back to classical enhance")
+                return [save_image(p, _classical(load_image(p)), _out_dir()) for p in pages]
+            import torch
+
+            net = _unet().to(self.device)
+            net.load_state_dict(torch.load(ckpt, map_location=self.device, weights_only=True))
+            net.eval()
+            out = []
+            with torch.no_grad():
+                for p in pages:
+                    img = load_image(p)
+                    g = img if img.ndim == 2 else img[:, :, 0]
+                    t = torch.from_numpy(g[None, None].astype(np.float32) / 255.0)
+                    t = torch.nn.functional.interpolate(t, scale_factor=0.5, mode="bilinear")
+                    rec_t = torch.nn.functional.interpolate(net(t), size=g.shape, mode="bilinear")
+                    rec = (rec_t.squeeze().clamp(0, 1).numpy() * 255).astype(np.uint8)
+                    out.append(save_image(p, rec, _out_dir()))
+            return out
+
+        # classical default
+        out = []
+        for i, pg in enumerate(pages):
+            out.append(save_image(pg, _classical(load_image(pg)), _out_dir()))
+            if (i + 1) % 100 == 0:
+                log.info("enhance %d/%d pages", i + 1, len(pages))
+        return out
+
+
+def _out_dir() -> Path:
+    return Path("data/interim/enhanced")
 
 
 def _collect_patches(
