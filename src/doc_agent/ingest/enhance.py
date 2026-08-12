@@ -7,15 +7,13 @@ from ..contracts import *  # noqa
 from .loader import load_image, save_image
 
 
+from pathlib import Path
+from ..logging_conf import get_logger
+log = get_logger("ingest.enhance")
 
-# class Enhancer:
-#     """Model set by cfg['enhance']. IMPLEMENT train() and apply()."""
-#     def __init__(self, cfg: dict) -> None:
-#         self.cfg = cfg["enhance"]
-#     def train(self, pages: list[Page]) -> None:
-#         raise NotImplementedError("Stage 1: train VAE/diffusion enhancer")
-#     def apply(self, pages: list[Page]) -> list[Page]:
-#         raise NotImplementedError("Stage 1: apply enhancer")
+CKPT_DIR = Path("data/interim/enhance")
+
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
@@ -73,6 +71,47 @@ class Enhancer:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg["enhance"]
         self.device = "cpu"
+    # -- training -----------------------------------------------------------
+    def train(self, pages: list[Page]) -> None:
+        """Self-supervised denoising: corrupt clean crops, learn to reconstruct (uses augment())."""
+        import torch
+        from torch.utils.data import DataLoader, TensorDataset
+
+        if self.cfg.get("model") != "unet_small":
+            log.info("enhance model=%s needs no training", self.cfg.get("model"))
+            return
+
+        rng = np.random.default_rng(int(self.cfg.get("seed", 42)))
+        patches = _collect_patches(pages, rng, patch=64, stride=48, max_patches=800)
+        if not patches:
+            log.warning("no patches to train enhancer on")
+            return
+
+        x = torch.from_numpy(np.stack(patches)[:, None].astype(np.float32) / 255.0)
+        noisy = torch.clamp(x + 0.10 * torch.randn_like(x), 0.0, 1.0)
+        ds = TensorDataset(noisy, x)
+        dl = DataLoader(ds, batch_size=16, shuffle=True)
+
+        model = _unet().to(self.device)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loss_fn = torch.nn.MSELoss()
+        epochs = int(self.cfg.get("epochs", 3))
+        model.train()
+        for ep in range(epochs):
+            tot = 0.0
+            for xb, yb in dl:
+                xb, yb = xb.to(self.device), yb.to(self.device)
+                opt.zero_grad()
+                loss = loss_fn(model(xb), yb)
+                loss.backward()
+                opt.step()
+                tot += float(loss.item())
+            avg = tot / max(len(dl), 1)
+            log.info("enhancer epoch %d/%d loss=%.5f", ep + 1, epochs, avg)
+
+        CKPT_DIR.mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), CKPT_DIR / "unet_small.pt")
+        log.info("saved enhancer checkpoint to %s", CKPT_DIR / "unet_small.pt")
 
 
 def _collect_patches(
