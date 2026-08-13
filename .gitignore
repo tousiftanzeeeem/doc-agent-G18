@@ -1,4 +1,5 @@
 data/raw/
+data/index/
 data/interim/
 *.ckpt
 wandb/

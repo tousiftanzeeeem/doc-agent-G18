@@ -8,7 +8,7 @@ enhance: {enabled: true, model: "clahe_denoise", type: "classical", train: false
 layout:  {model: "heuristic:projection", min_block_h: 20, merge_gap: 14}
 ocr:     {model: "rapidocr:PP-OCRv4-onnx", lang: "en", finetune: false, workers: 3}   # pretrained PP-OCRv4 ONNX (paddleocr blocked by paddlepaddle CPU bug)
 embed:   {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384}
-index:   {type: "numpy:flat", chunk_tokens: 256, overlap: 32}    # exact flat index: deterministic + fast at this scale (no faiss dep)
+index:   {type: "faiss:hnsw", dir: "data/index", chunk_tokens: 256, overlap: 32}    # HNSW + inner-product (cosine), metadata sidecar in dir
 retrieve: {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true, reranker: "cross-encoder/ms-marco-MiniLM-L6-v2"}   # drive evidence-gated re-search
 agent:   {max_steps: 8, autonomy: "act-with-approval", budget_usd: 0.05}
 rl:      {algo: "ppo", train_policy: false}                         # bonus: set true
