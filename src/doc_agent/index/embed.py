@@ -3,7 +3,7 @@
 from __future__ import annotations
 from ..contracts import *  # noqa
 from sentence_transformers import SentenceTransformer
-from ..config import load
+
 
 def encode(chunks: list[Chunk], cfg: dict):
     """Embed with cfg['embed']['model']. IMPLEMENT."""
@@ -38,6 +38,7 @@ def encode(chunks: list[Chunk], cfg: dict) -> list[list[float]]:
     return embeddings.tolist()
 
 def _test_encode():
+    from ..config import load
     """Quick sanity check for the embedding model."""
     chunks = [
         Chunk(id="test-0", doc_id="test-doc", text="Hello world!", page_ids=["test-page"], score=0.0),
