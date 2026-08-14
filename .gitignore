@@ -1,5 +1,10 @@
 data/raw/
 data/interim/
+
+
+# 126MB scanned PDF - fetched by scripts/get_data.sh (see data/provenance.md)
+corpus/
+
 *.ckpt
 wandb/
 __pycache__/
