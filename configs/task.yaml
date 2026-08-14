@@ -1,10 +1,10 @@
 # Stage 0 — problem statement (one per group). Set by assignment.
 group_id: "G18"
 domain: "public-health-history"          # scanned annual sanitary reports of colonial Bengal (1889)
-data_speciality: "degraded-scans"        # ONE hard corpus property: 1890 letterpress on aged paper —
-                                         # foxing, ink bleed-through, uneven inking, no text layer
-primary_nfr: "latency"                   # ONE quality we optimise above baseline (faithful+accurate are baseline)
-nfr_target: "p95 query latency <= 300ms on CPU (flat index, 384-d)"   # concrete committed target
+data_speciality: "unruled-tables+degraded-scans"   # ONE hard corpus property: unruled multi-column
+                                                   # statistical tables with faded/degraded old scans
+primary_nfr: "auditable"                 # ONE quality we optimise above baseline (faithful+accurate are baseline)
+nfr_target: "95% of answers have a completely replayable audit trail"   # concrete committed target
 corpus:
   min_pages: 300
   min_words: 60000
