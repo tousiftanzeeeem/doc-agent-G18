@@ -1,6 +1,6 @@
 HEADER
 ======
-Name: Rubiayat
+Name: Rubaiyat -E-Zaman
 Student number: 2105104
 Sections led: src/doc_agent/index/ (Stage 4 — chunk.py, embed.py, store.py); configs/config.yaml (index block); configs/design_choices.md (Row 4 — Index); reports/pipeline_diagram.md 
 
