@@ -13,6 +13,7 @@ import numpy as np
 from ..contracts import Page, Region
 from ..ingest.loader import load_image
 from ..logging_conf import get_logger
+from ..optional.table_recovery import has_whitespace_columns
 
 log = get_logger("vision.layout")
 
@@ -55,7 +56,12 @@ def _blocks(gray: np.ndarray, cfg: dict) -> list[tuple[int, int, int, int]]:
 
 
 def _has_ruling_lines(gray: np.ndarray, box: tuple[int, int, int, int], img_w: int) -> bool:
-    """Tables show up as runs of long horizontal rules; Hough detects them cheaply."""
+    """Tables show up as runs of long horizontal rules; Hough detects them cheaply.
+
+    A candidate only counts when it is a genuinely THIN horizontal rule (ink
+    concentrated in <=3 of the 9 neighbouring rows). Full-width prose lines are
+    thick strokes and must not count, or prose pages would be misread as ruled tables.
+    """
     x, y, w, h = box
     if w < img_w // 4:
         return False
@@ -65,7 +71,22 @@ def _has_ruling_lines(gray: np.ndarray, box: tuple[int, int, int, int], img_w: i
     lines = cv2.HoughLinesP(
         b, 1, np.pi / 180, threshold=max(20, w // 15), minLineLength=int(0.55 * w)
     )
-    return lines is not None and len(lines) >= 3
+    if lines is None:
+        return False
+    thin_rules = 0
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        if abs(y1 - y2) > 2 or not (0 <= y1 < b.shape[0]):
+            continue  # not horizontal, or out of range
+        xa, xb = min(x1, x2), max(x1, x2)
+        cover = [
+            float((b[y1 + dy, xa:xb] > 0).mean())
+            for dy in range(-4, 5)
+            if 0 <= y1 + dy < b.shape[0]
+        ]
+        if sum(1 for c in cover if c > 0.5) <= 3:
+            thin_rules += 1
+    return thin_rules >= 3
 
 
 def _classify(gray: np.ndarray, box: tuple[int, int, int, int], img_h: int, img_w: int) -> str:
@@ -73,8 +94,15 @@ def _classify(gray: np.ndarray, box: tuple[int, int, int, int], img_h: int, img_
     patch = gray[y : y + h, x : x + w]
     density = float((patch < 128).mean())
 
+    # --- table detection (ruled OR unruled) ---
     if _has_ruling_lines(gray, box, img_w):
         return "table"
+    # A1 data speciality: unruled whitespace-aligned tables (no ruling lines).
+    # Check for ≥ 2 whitespace-separated columns via projection profile.
+    if w > img_w // 4 and h > img_h // 8:
+        bbox4 = (x, y, x + w, y + h)
+        if has_whitespace_columns(gray, bbox4, min_cols=2):
+            return "table"
 
     page_area = img_h * img_w
     if h * w > 0.20 * page_area and (density < 0.03 or density > 0.45):
