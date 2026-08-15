@@ -18,7 +18,17 @@ dependencies = [
   "pydantic>=2.7,<3.0",
   "pyyaml>=6.0,<7.0",
   "pydantic-settings>=2.2,<3.0",
+  "opencv-python-headless>=4.9,<5.0",
+  "onnxruntime>=1.17,<2.0",
+  "pypdfium2>=4.30,<5.0",
+  "rapidocr-onnxruntime>=1.3,<2.0",
 ]
+
+[tool.uv]
+# rapidocr-onnxruntime pins the GUI opencv-python build, which needs libGL (absent on
+# headless CI runners). opencv-python-headless provides the same `cv2` module without it.
+exclude-dependencies = ["opencv-python"]
+
 
 [project.optional-dependencies]
 dev = ["ruff>=0.4", "black>=24.4", "mypy>=1.10", "pytest>=8.2", "pre-commit>=3.7"]
