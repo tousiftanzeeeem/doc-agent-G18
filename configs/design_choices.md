@@ -1,4 +1,10 @@
-# Per-stage design choices (A2 deliverable). Fill every cell.
+# Per-stage design choices (A2 deliverable)
+
+Corpus: *Twenty-second Annual Report of the Sanitary Commissioner for Bengal (1889)* — 836 scanned
+pages, 1890 letterpress, Internet Archive item `in.ernet.dli.2015.95111` (public domain).
+Domain: public-health history · Data speciality: **unruled-tables+degraded-scans** · Primary NFR: **auditable
+(95% replayable audit trail)**.
+
 | Stage | Problem statement | Data | Model | Methods | Design | Development | Deployment | MLOps |
 |---|---|---|---|---|---|---|---|---|
 | 0 Frame | Turn 836 degraded scans into a queryable KB; success = OCR quality + retrieval works, floors ≥300 pages / ≥60k words | 836 page-images (no text layer); held-out slice in grading_kit; splits by document | — (config in configs/) | Metric: OCR char-F1, recall@k, audit-trail replayability | task.yaml + manifest.yaml declare axes/corpus/entry points | pytest gates + notebooks | scripts/get_data.sh → data/raw | data/version.json snapshot + provenance.md |

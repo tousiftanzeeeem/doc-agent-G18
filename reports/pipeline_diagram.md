@@ -26,8 +26,8 @@ flowchart LR
     end
     subgraph S4["Stage 4 - Index"]
         R3 --> CH["chunk 256 tok / 32 overlap"]
-        CH --> E4["all-MiniLM-L6-v2 384-d"]
-        E4 --> IX[("flat numpy index: vectors.npy + chunks.json + meta.json")]
+        CH --> E4["all-MiniLM-L6-v2 384-d, normalized"]
+        E4 --> IX[("FAISS IndexHNSWFlat (inner product) + chunks.jsonl sidecar")]
     end
     IX --> RET["Stage 5 - dense retrieval: cosine top-k -> Chunk.score"]
     RET --> AG["Stage 6 - agent loop with evidence-gated re-search (A3)"]
@@ -41,9 +41,12 @@ Notes on what changed from the default:
   on CPU.
 - **OCR backend** is RapidOCR PP-OCRv4-onnx — the published pretrained PP-OCR detection +
   recognition models exported to ONNX and served by onnxruntime. PaddleOCR PP-OCRv5 was blocked
-  by the paddlepaddle 3.3.1 CPU crash; EasyOCR (CRAFT+CRNN) was ~4× slower and less accurate on
-  this corpus (documented in `configs/design_choices.md`).
-- **Index type** is `numpy:flat` (exact, deterministic) instead of faiss HNSW — at this corpus
-  scale a flat index meets the auditable NFR (determinism = reproducible traces) with zero ANN error.
+  by the paddlepaddle 3.3.1 CPU crash.
+- **Index type** is FAISS `IndexHNSWFlat`, built with `METRIC_INNER_PRODUCT` (not FAISS's default
+  L2) so retrieval scores are cosine similarities, consistent with the normalized embeddings from
+  Stage 4. Chunk metadata (id/doc_id/text/page_ids) is persisted alongside as a JSONL sidecar
+  (`chunks.jsonl`), since FAISS itself only stores vectors — kept in sync with the index by row
+  order. Chosen over a hosted vector DB for a fully local, free, dependency-light setup at this
+  corpus scale.
 - All intermediates are cached under `data/interim/` so rebuilds are incremental and the
   reproducibility gate holds.
