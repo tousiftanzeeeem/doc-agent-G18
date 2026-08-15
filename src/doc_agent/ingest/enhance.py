@@ -84,12 +84,27 @@ def _unet() -> torch.nn.Module:
     return UNet()
 
 
+def _resolve_device(requested: str) -> str:
+    """'cuda' if requested and torch has a usable CUDA device, else 'cpu'."""
+    if requested != "cuda":
+        return "cpu"
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    log.warning("device: cuda requested but torch has no CUDA — enhancer falls back to cpu")
+    return "cpu"
+
+
 class Enhancer:
     """Model set by cfg['enhance']; train() learns the denoiser, apply() enhances pages."""
 
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg["enhance"]
-        self.device = "cpu"
+        self.device = _resolve_device(str(cfg.get("device", "cpu")))
 
     # -- training -----------------------------------------------------------
     def train(self, pages: list[Page]) -> None:
