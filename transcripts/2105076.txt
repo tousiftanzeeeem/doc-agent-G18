@@ -1,0 +1,318 @@
+HEADER
+------
+Member name: Mobsharul Islam Tonmoy
+Student number: 2105076
+Sections led: Stage 0 Frame & configs, Stage 1 Corpus & provenance, Stage 2 Ingest (load -> preprocess -> enhance), data validation & corpus versioning, CI build fixes (uv.lock + runtime deps)
+
+FULL CONVERSATION
+-----------------
+
+---
+
+User: hey, starting on A2 for group 18. our project is the bengal sanitary reports thing — degraded scans, latency NFR. i'm handling the config/corpus/ingest side. the starter repo is kinda strict about module paths and stuff right? like we can't add new files or rename things?
+
+AI: That's correct — the starter repo locks the module paths and function signatures. The CI gates enforce this, so if you rename a module or change a function signature, the structure tests will fail immediately.
+
+The good news is that `configs/config.yaml` is your main control surface. All model choices, hyperparameters, and pipeline settings go there. The code reads from config at runtime, so you configure behavior without touching module structure.
+
+What's in your `config.yaml` right now? Have you updated it from the default stub?
+
+User: not yet, just the default values. here's what i'm thinking:
+
+    data:    {root: data/raw, dpi: 300, max_pages: -1}
+    preprocess: {enabled: true, denoise: true, binarize: true, deskew: true, augment: false}
+    enhance: {enabled: true, model: "clahe_denoise", type: "classical", train: false}
+    layout:  {model: "heuristic:projection", min_block_h: 20, merge_gap: 14}
+    ocr:     {model: "rapidocr:PP-OCRv4-onnx", lang: "en", finetune: false, workers: 3}
+    embed:   {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384}
+    index:   {type: "numpy:flat", chunk_tokens: 256, overlap: 32}
+    retrieve: {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true}
+
+does 300 dpi seem right? i want to be safe on quality
+
+AI: I'd actually recommend 200 DPI. For 1890 letterpress with standard-size type, there's a well-known diminishing-returns curve — going from 150→200 gives a noticeable accuracy boost, but 200→300 gives very little extra for about double the disk/time cost.
+
+Since your NFR is latency (p95 ≤ 300 ms), keeping the input resolution minimal helps. You could always re-render a few held-out pages at 300 later and compare char-F1 to verify this.
+
+User: yeah that makes sense, changed to 200. ok next, the actual corpus. the PDF is from internet archive, item in.ernet.dli.2015.95111. its like 126 MB so obviously cant go in git. whats the best way to handle this?
+
+AI: Write a `scripts/get_data.sh` that downloads the PDF into `data/raw/`. A few things to include:
+
+- Check if the file already exists before downloading (skip if so)
+- Use `curl -L --fail --retry 3` — the `-L` follows redirects (archive.org uses them), `--fail` ensures HTTP errors cause a non-zero exit, and `--retry` handles transient network failures
+- `set -euo pipefail` at the top so the script fails loudly on any error
+
+Something like:
+
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DEST="data/raw/bengal1889.pdf"
+    URL="https://archive.org/download/in.ernet.dli.2015.95111/..."
+    mkdir -p data/raw
+    if [ -f "$DEST" ]; then
+      echo "already present"
+    else
+      curl -L --fail --retry 3 -o "$DEST" "$URL"
+    fi
+
+User: yeah actually i already tried downloading it without --fail and the download interrupted halfway. curl exited 0 so the script looked fine. then pypdfium2 choked on it later and i spent like 20 min trying to figure out why render was failing before i realized the pdf was truncated lol. --fail is definitely needed.
+
+scripts done. now the renderer — i want to use pypdfium2 to turn each page into a jpeg. pretty straightforward right?
+
+AI: pypdfium2 is a good choice — no system dependency on poppler. Basic approach:
+
+```python
+import pypdfium2 as pdfium
+
+doc = pdfium.PdfDocument(str(pdf_path))
+scale = dpi / 72.0  # PDF points are 72 per inch
+for i in range(len(doc)):
+    img = doc[i].render(scale=scale)
+    img.save(out_dir / f"page_{i}.jpg")
+```
+
+One thing to watch out for — `render()` returns a `PdfBitmap`, not a PIL Image. You may need to convert it depending on the pypdfium2 version.
+
+User: yep that exact thing happened:
+
+    AttributeError: 'PdfBitmap' object has no attribute 'save'
+
+AI: Right, you need to call `.to_pil()` on the bitmap first, then convert to RGB (the bitmap can come back as RGBA, JPEG doesn't support alpha):
+
+```python
+img = doc[i].render(scale=scale).to_pil()
+img.convert("RGB").save(out_path, quality=88)
+```
+
+User: that works. but the pages sort wrong — page_1, page_10, page_100 before page_2. typical lexicographic issue
+
+AI: Zero-pad the filenames:
+
+```python
+out = out_dir / f"page_{i + 1:04d}.jpg"
+```
+
+Gives you `page_0001.jpg` through `page_0836.jpg`. Also worth adding a skip-if-exists check so reruns don't redo everything—if the renderer crashes at page 500, you only need to pick up from there.
+
+User: done. also added support for pre-existing page images so teammates can drop in images directly. ok preprocessing next.
+
+i was thinking NL-means denoising (cv2.fastNlMeansDenoising), seems like a strong approach?
+
+AI: It depends on the noise profile. What kind of degradation are you seeing in these scans? NL-means is designed for Gaussian noise, but historical scans tend to have different issues — foxing (brown spots), bleed-through, uneven ink density...
+
+User: hmm i benchmarked it on 20 pages and its about 9 sec per page. 836 pages = over 2 hours. thats... not great
+
+AI: Yeah, that's too slow for this corpus size. And if the dominant issues are foxing and bleed-through rather than Gaussian noise, NL-means is doing expensive computation that doesn't address the actual problems.
+
+A much faster pipeline for this kind of material:
+
+1. Grayscale conversion
+2. Light Gaussian blur (3×3, sigma ~0.8) — suppresses paper grain
+3. Otsu binarization — handles uneven inking adaptively
+4. Deskew if tilted
+
+This runs at maybe 20-30 ms/page instead of 9 seconds. One important note: save the grayscale output, not the binary mask. OCR and layout both work better on grayscale since they do their own internal binarization.
+
+User: massive improvement yeah. around 30ms per page now.
+
+deskew is giving me trouble though. i'm using cv2.minAreaRect on the binarized image and the angles are all over the place. some pages rotate correctly, some pages get rotated 90 degrees the wrong way
+
+AI: `minAreaRect` has one of the most confusing angle conventions in all of OpenCV. It reports the angle of the rectangle's shorter side relative to horizontal, in the range [-90, 0). The trick is the "shorter side" part — it swaps which side it uses depending on the contour shape.
+
+You need to normalize the angle. Here's a recipe that handles the quadrant correctly:
+
+```python
+def _skew_angle(bimg):
+    small = cv2.resize(bimg, (bimg.shape[1]//4, bimg.shape[0]//4))
+    coords = np.column_stack(np.where(small > 0))
+    if len(coords) < 100:
+        return 0.0
+    (_, _), (w, h), angle = cv2.minAreaRect(coords.astype(np.float32))
+    if w < h:
+        angle = 90.0 + angle
+    if abs(angle) > 45:
+        angle = 0.0
+    return float(angle)
+```
+
+The downscaling (4×) makes it ~16× cheaper with no practical accuracy loss. And only apply the rotation when abs(angle) > 0.5° or so — no point blurring already-straight pages.
+
+User: tried it but one of the pages i checked is tilting worse after the correction. like a page that slopes up-right gets rotated MORE up-right
+
+AI: Sign error — this is the other common trap with `minAreaRect`. The rotation matrix in `cv2.getRotationMatrix2D` rotates counter-clockwise for positive angles, which can double the tilt instead of correcting it depending on the angle's sign.
+
+Honestly the fastest way to debug this is to write a unit test with a synthetic tilted image:
+1. Create a simple text image
+2. Rotate it by a known angle (say +3°)
+3. Run your deskew
+4. Assert the result is within ~0.2° of 0
+
+Once the synthetic test passes, you know the sign convention is locked and it won't regress.
+
+User: good call. wrote the test, found i needed to negate the angle before passing to getRotationMatrix2D. synthetic test passes now with <0.1 degree error. checked on real pages too, looks correct everywhere.
+
+next thing — enhancement. the design_choices table mentions VAE/diffusion as an option but we're CPU-only. thats not gonna work for 836 pages right?
+
+AI: Correct — a diffusion model on CPU for 836 pages would take hours or days, and the benefit over classical enhancement for already-preprocessed scans would be marginal.
+
+I'd suggest two paths with a shared interface:
+
+**Path 1 (default):** Classical CLAHE + unsharp mask. Fast, deterministic, handles the uneven inking and low contrast specific to your scans.
+
+**Path 2 (trainable option):** A tiny UNet denoiser (like ~45k params) that you can train self-supervised — corrupt pages with synthetic noise, train to invert the corruption. Trains in minutes on CPU. Serves as a documented "from-scratch" option.
+
+Set classical as the default if it wins the comparison. If the UNet doesn't beat classical in your held-out char-F1, say so honestly in design_choices.md.
+
+User: trained the unet for 3 epochs on 800 patches. loss went from 0.010 to 0.008 ish. the enhanced pages look... blurrier than the classical path tbh. so classical it is. documented the comparison.
+
+one practical problem — every time i change a parameter i have to re-run the whole ingest pipeline from scratch. 836 pages from render through enhance takes a while
+
+AI: You need per-stage caching. The pattern is simple: before processing a page through a stage, check if the output file already exists. If it does, skip that page.
+
+You're already doing this for rendering (skip if the JPEG exists). Apply the same pattern to preprocess and enhance — check for `data/interim/processed/{page_id}.jpg` and `data/interim/enhanced/{page_id}.jpg`.
+
+The downside is you need to manually delete the cache if you change a stage's parameters (`rm -rf data/interim/processed/`), but that's much better than reprocessing everything every time.
+
+User: yeah makes sense. added caching to both stages, experiments are way faster now.
+
+ok data validation. starter expects schema validation and the spec says floor is 300 pages + 60k words. what should validate() actually enforce? i dont want it to break when running on small subsets during dev
+
+AI: Separate hard invariants from soft floors:
+
+**Always fail on:**
+- Empty page list (something fundamentally broken)
+- Duplicate page IDs (would corrupt the index)
+- Missing image files on disk
+
+**Warn but don't fail:**
+- The 300 pages / 60k words threshold — log a warning on subset runs, only hard-fail if you detect you're processing the full corpus. Unit tests typically run on 2-5 pages and shouldn't need the full dataset.
+
+User: makes sense. implemented it with MIN_PAGES=300 and MIN_WORDS=60000 as constants. warns on subsets, errors on the full run if it falls short.
+
+also filled in provenance.md — archive.org urls, licence (public domain, DLI collection), scan difficulty notes. and wrote data/version.json with the pdf hash and page count for corpus versioning.
+
+now for CI — the gate is failing and i need to figure out why.
+
+first error:
+
+    uv sync --frozen --extra dev
+    error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided
+
+there's no uv.lock in the repo, just a requirements.lock
+
+AI: `--frozen` tells uv to install exactly from the lockfile without re-resolving — it's a reproducibility guarantee. But it requires the lockfile to exist.
+
+Fix: run `uv lock` locally to generate `uv.lock` from your `pyproject.toml`, then commit it. The file pins every transitive dependency to exact versions.
+
+User: ok ran uv lock, got 144 packages pinned. committed. gate progresses further but now fails on bandit:
+
+    > Issue: [B101:assert_used] Use of assert detected.
+       Location: src/doc_agent/hooks.py:36
+    Severity: Medium   Confidence: High
+
+the register() function does `assert seam in SEAMS`. bandit exits non-zero on any finding.
+
+thats actually in hooks.py which is Tanzim's initial commit. i'll let him know about it so the fix comes from his side.
+
+AI: Good call — keeping the commit under the right person matters for the authorship check. The fix is straightforward: replace the assert with `if seam not in SEAMS: raise ValueError(...)`. Assert statements get stripped under `python -O`, so bandit flags them as unreliable validation.
+
+User: sent it to him. he pushed the fix. meanwhile the gate goes further and hits another error:
+
+    tests/test_structure.py::test_required_symbols_exist
+    E   ModuleNotFoundError: No module named 'cv2'
+    src/doc_agent/vision/layout.py:10: ModuleNotFoundError
+
+but it works fine locally??
+
+AI: Classic "works on my machine." Your local environment has OpenCV installed, probably from a manual `pip install` at some point. But the CI gate installs only from the lockfile, and `cv2` isn't declared in `pyproject.toml`.
+
+You probably have other undeclared deps too. Check all your imports — I'd expect at least `cv2`, `onnxruntime`, `pypdfium2`, and `rapidocr-onnxruntime` are missing.
+
+User: yep all four were undeclared. added them to pyproject.toml. one complication though — rapidocr-onnxruntime pulls in opencv-python (the GUI build) as a dependency, but we need opencv-python-headless for CI since the github runner doesn't have libgl
+
+AI: Right. The GUI build tries to load `libGL.so.1` at import time, which isn't available on github runner images. Use `opencv-python-headless` and tell uv to exclude the GUI build from rapidocr's transitive dependencies:
+
+```toml
+[tool.uv]
+exclude-dependencies = ["opencv-python"]
+```
+
+Then verify in a clean environment: `python -c "import cv2, onnxruntime, pypdfium2, rapidocr_onnxruntime"` — all four should import without errors.
+
+User: tested in a fresh venv. cv2 4.11.0 headless, onnxruntime 1.28.0, pypdfium2, rapidocr all import clean. ran the full test suite — structure tests, contracts, smoke tests all pass. gate is green finally.
+
+thats everything on my end — ingest pipeline runs end to end on all 836 pages and CI is reproducible from a clean checkout.
+
+---
+
+User: coming back to wrap up a few things. i need to fill in design_choices.md for stages 0 and 1. the file currently only has stubs for those rows. whats the best way to structure this?
+
+AI: The table in `design_choices.md` has eight facets per stage: Problem statement, Data, Model, Methods, Design, Development, Deployment, MLOps. You need to fill each column with what you actually did, not what someone might do in theory.
+
+For **Stage 0 (Frame)**, the key content is:
+- **Problem statement**: the "turn 836 degraded scans into a queryable KB" goal with concrete success criteria (OCR char-F1, recall@k, audit-trail replayability) and the floor thresholds (300 pages, 60k words)
+- **Data**: the 836 page-images, held-out slice in grading_kit, splits by document
+- **Design**: task.yaml + manifest.yaml declare all the axes/corpus/entry points
+- **Development**: pytest gates + notebooks
+- **Deployment**: scripts/get_data.sh → data/raw
+- **MLOps**: data/version.json snapshot + provenance.md
+
+For **Stage 1 (Ingest+Enhance)**, the critical things to document are:
+- The model choice: classical enhance (CLAHE + unsharp) by default, with the UNet denoiser as a documented from-scratch alternative that lost the comparison
+- The methods: the full preprocessing pipeline (pypdfium2 render → grayscale → Gaussian denoise → Otsu binarize → deskew → CLAHE+unsharp)
+- The UNet denoiser specs (~45k params, self-supervised training, 3 epochs on 800 patches)
+- Per-stage caching under data/interim
+
+Be specific about what you tried and rejected — the NL-means approach going from 9s/page to 30ms/page with the Gaussian+Otsu pipeline is exactly the kind of justified engineering decision graders look for.
+
+User: right, got it. filled in both rows. one thing — the config.yaml has changed a few times since i first set it up. rubaiyat updated the index type from numpy:flat to faiss:hnsw after implementing store.py. i should make sure design_choices row 1 still matches the current config right?
+
+AI: Exactly — this is one of the most common consistency traps. The config evolved as different team members implemented their stages. Here's what to verify:
+
+1. Check that `config.yaml` values match what `design_choices.md` claims for each stage
+2. Specifically watch for: `index.type` (should be `faiss:hnsw` now), `ocr.workers` (currently 2 in config), `device` (currently `cuda` in config)
+3. The pipeline_diagram.md also needs to match — make sure the FAISS IndexHNSWFlat description there is consistent
+
+The grading rubric explicitly says "every claim in the form must match your own code" — the same principle extends to design_choices.md.
+
+User: good catch. i also need to write some tests for the ingest pipeline. the existing test_ingest.py has some stubs. what should i cover?
+
+AI: For the ingest pipeline, focus on testing the core data contracts and edge cases:
+
+1. **Loader tests**: verify `load_pages()` returns `Page` objects with valid `id`, `image_path`, `doc_id`; test the skip-if-exists behavior in `_render_pdf`; test handling of pre-existing page images
+2. **Preprocess tests**: verify `_preprocess_one()` produces a grayscale output of the right shape; test deskew with a synthetic tilted image (you already wrote this one); test that caching skips already-processed pages
+3. **Validate tests**: verify the hard invariants (empty list → error, duplicate IDs → error) and soft floors (small subset → warning, full corpus below floor → error)
+
+Mock the heavy operations (PDF rendering, image I/O) so tests run fast without needing the actual 126MB PDF.
+
+User: wrote the tests. test_ingest now covers loader, preprocess caching, and validation. all passing.
+
+one more thing — the A2 form needs the member responsibilities filled in. should i list exactly what my commits touched?
+
+AI: Yes, but frame it in terms of stages and responsibilities rather than individual files. Something like:
+
+- **Stage 0 (Frame)**: configs/config.yaml, configs/task.yaml, configs/design_choices.md (stages 0-1), data/provenance.md, data/version.json
+- **Stage 1 (Ingest+Enhance)**: loader.py (PDF render + page discovery), preprocess.py (denoise/binarize/deskew pipeline), enhance.py (CLAHE classical + UNet from-scratch), data/validate.py (corpus floor checks), data/versioning.py
+- **CI/Build**: pyproject.toml (runtime dependency declarations + headless opencv workaround), uv.lock generation, scripts/get_data.sh
+
+Also mention the cross-cutting work — fixing the bandit finding coordination with Tanzim, the undeclared dependency hunt, the GUI/headless opencv conflict resolution.
+
+User: that looks comprehensive. pushed everything — design_choices stages 0-1 filled, A2 form updated, tests passing, config.yaml finalized.
+
+REFLECTION
+----------
+- What I accepted: the locked module layout / config-only-knobs constraint;
+  the IA DLI corpus (public domain, genuinely degraded); pypdfium2 for
+  rendering (no system deps); 200 DPI (cheaper, good enough for letterpress);
+  fixed corpus floor (300 pages / 60k words) with subset-safe validation.
+- What I changed: DPI from 300 to 200 after reasoning about diminishing
+  returns; preprocessing from NL-means (~9 s/page) to blur+Otsu+deskew
+  (~30 ms/page); deskew sign convention (locked with a synthetic unit test);
+  enhancement default to classical after UNet was blurrier; added per-stage
+  caching; generated the missing uv.lock; declared 4 undeclared runtime deps
+  with headless opencv + [tool.uv] exclude workaround; filled in
+  design_choices.md stages 0-1 to match final config; wrote ingest+validation
+  unit tests.
+- What I rejected: dpi 300 (2x cost, no measured gain); diffusion/VAE
+  enhancement (CPU infeasible, UNet lost to classical anyway); NL-means
+  (wrong noise model, way too slow); GUI opencv-python on CI (libgl missing).
