@@ -1,0 +1,250 @@
+HEADER
+------
+Member name: Tanzim Tousif
+Student number: 2105071
+Sections led: Stage 2 Layout detection, Stage 3 OCR engine (selection + worker pool), OCR evaluation (char-F1 vs held-out labels), EDA notebook, hooks.py fix, design_choices.md (stages 2-3)
+
+FULL CONVERSATION
+-----------------
+
+---
+
+User: Working on the vision half for G18, A2. I own layout detection and OCR. Corpus is 836 pages of 1890 Bengal sanitary reports — already rendered and preprocessed by Tonmoy. Pages are in data/interim/processed/.
+
+For layout I'm thinking PP-DocLayout or maybe a YOLO-based detector. Need to detect text blocks, tables, headings, and figures.
+
+AI: Before committing to a detection model, consider your constraints:
+
+1. You're CPU-only (latency NFR)
+2. Do you have layout annotations (bounding boxes with region labels) for this corpus?
+3. What's the actual layout complexity?
+
+A detection model needs labeled training data and is significantly slower on CPU. If the layout is relatively simple (single-column prose with occasional tables), a classical approach might be sufficient.
+
+What does a typical page look like?
+
+User: No layout labels, and yeah most pages are single-column letterpress. There are some statistical tables but they're not in crazy multi-column layouts or anything. So maybe classical is fine?
+
+AI: For single-column text with occasional tables, a projection/contour heuristic is a reasonable choice. It runs at ~0.05 s/page on CPU with no training data needed. The specification allows heuristic methods if justified in `design_choices.md`.
+
+You can always swap in a detection model later if needed — the function signatures are fixed, so only the internals change.
+
+User: Ok going classical. First attempt: binarize, findContours, boundingRect on each contour. Getting like 400 bounding boxes per page — every letter group and ink speck gets its own box. Obviously not useful as layout regions.
+
+AI: That's expected — you're finding every connected component in the binary image. You need morphological operations to merge nearby components into region-level blocks.
+
+The key operation is a **morphological close** — it dilates then erodes, which bridges gaps between nearby text. Applied with the right kernel, individual text runs merge into paragraph-sized blobs. Then filter out small contours.
+
+The kernel size should scale with the page dimensions. At 200 DPI, text lines are ~40–60px tall. Try something like:
+
+```
+kx = max(15, width // 60)    # bridge inter-word spacing
+ky = max(9, height // 90)    # bridge inter-line spacing
+```
+
+User: Much better, getting around 20 boxes per page now. But some paragraphs where the ink faded in the middle still split into two separate boxes. Sends the wrong half of a paragraph to OCR.
+
+AI: You need a merge pass. Two boxes should merge if:
+- Their intersection is > 50% of the smaller box's area, OR
+- They're on the same horizontal band (> 60% vertical overlap) and the horizontal gap is small
+
+Sort top-to-bottom first and iterate greedily so merged boxes can absorb additional boxes.
+
+User: Implemented it with merge_gap from the config (default 14). Works well, split paragraphs are reuniting.
+
+Now reading order. I have sorted(boxes, key=lambda b: (b[1], b[0])) which works for pure single-column but I was told this corpus has dense statistical tables where multiple boxes sit side by side?
+
+AI: Right, a global (y, x) sort will interleave side-by-side table cells with text blocks at similar y-positions. A cheap fix is a **banded sort**: group boxes into horizontal rows based on y-position relative to the median box height, sort each row left→right, then stack rows top→bottom.
+
+```python
+med_h = float(np.median([b[3] for b in boxes]))
+bands = {}
+for b in boxes:
+    band = int(b[1] // max(med_h, 1))
+    bands.setdefault(band, []).append(b)
+ordered = []
+for band_key in sorted(bands):
+    ordered.extend(sorted(bands[band_key], key=lambda b: b[0]))
+```
+
+This is deterministic (important for the reproducibility gate) and keeps within-row order correct for tables.
+
+User: Banded sort in. Now I need to classify each box: text vs table vs figure vs heading. The tables look like regular text blocks visually — just lots of ink in a rectangle.
+
+AI: For 19th-century government reports, tables have a distinctive feature: **horizontal ruling lines** (printed rules separating rows). You can detect them with `HoughLinesP`.
+
+Key detail: the thresholds must scale with box width, otherwise wide paragraphs get flagged as tables since their text lines look like "rules" to Hough.
+
+User: Yeah exactly that happened. First version with fixed threshold=20 classified half the text blocks as tables. Tried scaling by box width:
+
+    threshold=max(15, w // 20)
+    minLineLength=int(0.5 * w)
+
+Got better but still some false positives on wide paragraphs with dense ink. After tweaking thresholds a bit and adding a guard that rejects boxes narrower than img_w // 4 as tables, it works clean. >= 3 horizontal lines = table.
+
+For figures I'm using ink density — plates and maps are either nearly blank (linework) or nearly solid (halftone). density < 0.03 or > 0.45, and area > 20% of page.
+
+Headings: short + wide + near the top or bottom edge of page. Used threshold of 1.7 * max(12, img_h // 110) for height and position check < 12% from top or > 92% from bottom.
+
+Everything else is text.
+
+AI: That classification hierarchy looks solid — tables first (ruling lines), then figures (density + area), then headings (position + size), then text as default. Good that you're scaling all thresholds by page dimensions rather than hardcoding pixel values.
+
+Have you unit-tested the classification on synthetic pages?
+
+User: Yeah, created synthetic test images with known region types — forced text, forced table (with drawn horizontal lines), etc. All pass. Layout detection is done.
+
+Moving to OCR. I want to try PaddleOCR PP-OCRv5.
+
+AI: Go ahead and install it, but I'd suggest testing on a single page first before committing. PaddleOCR can have CPU compatibility issues with recent PaddlePaddle versions.
+
+User: Yeah it's completely dead:
+
+    NotImplementedError: ConvertPirAttribute2RuntimeAttribute
+    (PIR inference is not supported in this paddlepaddle build)
+
+paddlepaddle 3.3.1 CPU build has some kind of PIR/oneDNN bug. The model won't even run.
+
+AI: That's a known issue with recent PaddlePaddle CPU wheels. Two alternatives to consider:
+
+1. **EasyOCR** — CRAFT detector + CRNN recognizer, reliable on CPU
+2. **RapidOCR** — Same PP-OCRv4 models as PaddleOCR but exported to ONNX and served by onnxruntime, avoiding the broken PaddlePaddle runtime
+
+I'd suggest benchmarking both on the same ~20 pages to compare speed and accuracy.
+
+User: Benchmarked both:
+- EasyOCR: works but about 4x slower. Merged columns on the dense tables, dropped digits in narrow cells
+- RapidOCR: ~0.9 s/page single-thread, cleaner reading on tables, handles the old orthography (long-s) better than expected
+
+RapidOCR wins.
+
+AI: Makes sense — it's the same PP-OCR model family with a more reliable runtime. Make sure you wrap it behind the starter's `Reader` interface so the engine choice lives in config. And use lazy initialization for the ONNX model — keeps import time fast and lets tests mock the reader.
+
+User: Done. One design question — I initially had OCR running on each region crop separately. That's like 20 regions/page * 836 pages = ~17k model calls. Stupidly slow. Talked with Tonmoy and he suggested doing whole-page OCR once and distributing the text lines into regions by geometric containment.
+
+AI: That's a much better approach. One model pass per page gives you 836 calls instead of ~17,000. And the detection model actually works better with full page context — it handles lines near region boundaries more accurately than when you crop individual regions.
+
+For the containment: use each OCR line's center point and check which region bbox contains it. A small tolerance (~4px) handles lines sitting on boundaries.
+
+User: Implemented it. Lines that don't fall in any region get dropped silently — mostly noise detections in margins. Also caching per-page OCR results to data/interim/ocr_cache/{page_id}.json so rebuilds of the index don't re-run the recognizer.
+
+Now I want to parallelize. Single-threaded is ~12 min for 836 pages. Tried multiprocessing:
+
+    with Pool(6) as pool:
+        pool.map(lambda pid: ocr_page(pid), page_ids)
+
+crashes instantly:
+
+    AttributeError: Can't get attribute 'ocr_page' on <module ...>
+
+AI: That's a pickling error. `multiprocessing.Pool` needs to pickle the function and its arguments to send to worker processes. Lambdas can't be pickled.
+
+Use a top-level function instead, and pass the arguments as a tuple. Also two important things:
+1. Each worker needs its own Reader instance — don't share ONNX sessions across processes
+2. Cap the per-worker thread count to avoid oversubscription (e.g., `16 // workers` threads each)
+
+User: Right, got it working with a top-level _ocr_page_worker function and imap_unordered. Initially tried workers=6 but the box only has 16 threads — at 6 workers thats not enough threads per worker for the ONNX runtime to be efficient. Settled on workers=2 in the final config (gives each worker ~8 threads). Total OCR time dropped to about 5-6 minutes.
+
+AI: Good catch on the thread budget. `imap_unordered` is a good choice too — it yields results as they complete rather than blocking on slow pages.
+
+User: Now eval. I need held-out pages with ground truth labels and a char-level metric.
+
+Picked pages 12, 16, 18, 19 for the held-out set. Hand-transcribed the text into grading_kit/labels.jsonl. Computed char-F1... first attempt gave me ~0.58.
+
+Then I realized I wasn't stripping whitespace — the OCR engine adds spurious spaces at line boundaries and between columns. After stripping whitespace from both pred and gold before comparing, the mean jumped to 0.678.
+
+Per-page: 0.971 (p0012, clean title page), 0.673 (p0016, dense stats table), 0.524 (p0018), 0.544 (p0019, complex layout with marginal notes).
+
+AI: The 0.678 mean is an honest number for this kind of material — 19th-century scans with foxing and bleed-through are fundamentally harder than modern prints. Don't try to inflate it.
+
+One useful analysis for the EDA: look at which pages are worst and investigate why. If bleed-through pages cluster at the bottom, that tells you the enhancement stage upstream could potentially help — and it demonstrates understanding of the pipeline to graders.
+
+User: Good point. I actually tried a different set of held-out pages first that included fold-out maps and a full-page table. The char-F1 was garbage and the labels were a pain to transcribe. Rubaiyat suggested switching to prose pages for the quantitative evaluation and just reporting table/map quality qualitatively. Made more sense — prose is the honest measure of the recognizer's text quality.
+
+The EDA notebook has per-page F1 bar chart, confidence histogram, error analysis showing bottom quartile is dominated by bleed-through pages, and a scatter of confidence vs F1 (weak positive r ≈ 0.3).
+
+Pushed everything. That wraps my section — layout detection with classification, page-level parallelized OCR, and evaluation.
+
+---
+
+User: hey, coming back to tie up some loose ends. Tonmoy pointed out that bandit is flagging an assert in hooks.py that came from the initial commit i pushed. the error is:
+
+    > Issue: [B101:assert_used] Use of assert detected.
+       Location: src/doc_agent/hooks.py:36
+
+can you explain what the problem is and how to fix it?
+
+AI: The issue is that `assert` statements in Python are stripped when running with the `-O` (optimize) flag. Bandit flags them because using `assert` for validation that should *always* run — like checking that a seam name is valid — is unreliable in production. If someone runs `python -O pipeline.py`, the assert silently disappears and invalid seam values would pass through uncaught.
+
+The fix is to replace:
+```python
+assert seam in SEAMS
+```
+
+with an explicit if-check that raises a proper exception:
+```python
+if seam not in SEAMS:
+    raise ValueError(f"Unknown seam: {seam!r}. Valid seams: {SEAMS}")
+```
+
+This has three advantages:
+1. It runs regardless of optimization flags
+2. It gives a clear error message (the assert version just says `AssertionError` with no context)
+3. Bandit won't flag it
+
+User: that makes sense. pushed the fix — bandit is clean now. while i'm at it, Tonmoy also mentioned that we need to update the design_choices.md for stages 2 and 3 based on my actual implementation. the current rows are pretty bare.
+
+AI: Yes — `design_choices.md` is an A2 deliverable and graders will check that it matches your code. For your stages, here's what to document:
+
+**Stage 2 (Layout):** The key points are:
+- Model: heuristic projection/contour, chosen over PP-DocLayout/YOLO because CPU-only + no labels
+- Methods: the full pipeline — Otsu → morphological close (kernel scaled by page dims) → findContours → overlap merge → banded reading order → classify hierarchy (ruling lines → density → position → text)
+- The scaling formulas for kernel sizes and Hough thresholds — these demonstrate dimensionally-aware engineering
+- The A1 data speciality: unruled whitespace-column table detection via projection-profile
+
+**Stage 3 (OCR):** The critical items:
+- Model: RapidOCR PP-OCRv4-onnx, documenting that PaddleOCR PP-OCRv5 crashed and EasyOCR was 4× slower
+- Page-level OCR with region containment (vs per-region crops)
+- Worker pool tuning (workers=2, thread budget)
+- Caching under data/interim/ocr_cache/
+- The eval numbers: mean char-F1 0.678 with per-page breakdown
+
+User: filled in both rows. also added the table recovery detail — the spatial bounding-box intersection approach for mapping unruled table cells to cached OCR lines, rather than re-running inference on each cell crop.
+
+one question — the Hough threshold in my code is now `max(20, w // 15)` and `minLineLength=int(0.55 * w)`, but in my earlier chat above i mentioned `max(15, w // 20)` and `0.5 * w`. should the design_choices reflect the final code or the original attempt?
+
+AI: Always document the **final, committed code** in design_choices.md — that's what graders will actually check against. If you want to mention the iteration (started at 15/20 and tuned to 20/15), you can put that in the Methods column as evidence of engineering judgment, but the primary description should match what `layout.py` actually does right now.
+
+It's worth double-checking your layout.py against what you wrote in design_choices.md before submitting — threshold mismatches between documentation and code are one of the most common grounding-gate failures.
+
+User: good call, verified everything matches. also added the thin-rule filtering detail — my _has_ruling_lines function checks that each candidate horizontal line has ink concentrated in ≤3 of 9 neighbouring rows, which prevents full-width prose lines from being counted as table rules.
+
+pushed the design_choices update. anything else i should check for consistency?
+
+AI: Two things worth checking:
+
+1. **EDA notebook** — make sure the eval numbers in the notebook (per-page F1 values, mean) match what you wrote in design_choices.md and what `scripts/run_eval.py` actually produces. If you re-ran eval after tweaking something, the numbers might have shifted slightly.
+
+2. **A2 form** — Section 3 (Components & Options We Considered) should have rows for layout and OCR with the alternatives you benchmarked. Section 4 (Knowledge Base We Built) should have the model names and key parameters matching config.yaml.
+
+User: checked both — numbers in the notebook match the design_choices doc. A2 form sections 3 and 4 are filled for layout and OCR. everything is consistent.
+
+REFLECTION
+----------
+- What I accepted: classical projection/contour layout over a detection model
+  (CPU-only, no labels, fast enough); RapidOCR PP-OCRv4 ONNX after
+  benchmarking three engines; page-level OCR with region containment instead
+  of per-region crops; 4px containment tolerance; per-page JSON cache; the
+  honest headline number (mean char-F1 0.678); banded reading order for
+  deterministic table-row sequencing.
+- What I changed: morphological kernel scaling after first attempt with
+  raw contours gave ~400 boxes/page; merge pass after paragraphs split at
+  ink gaps; Hough thresholds scaled by box width after fixed values
+  flagged paragraphs as tables; thin-rule filtering to reject prose lines;
+  OCR workers from 6 to 2 (thread budget); held-out page set after first pick
+  included maps/tables; F1 metric to strip whitespace; hooks.py assert→ValueError
+  fix for bandit; filled design_choices.md stages 2-3 with verified details.
+- What I rejected: PaddleOCR PP-OCRv5 (paddlepaddle CPU crash); EasyOCR
+  (4x slower, worse on dense tables); per-region OCR crops (~17k calls vs
+  836); inflating eval numbers (0.678 is what it is); documenting
+  intermediate parameter values instead of final committed code.
