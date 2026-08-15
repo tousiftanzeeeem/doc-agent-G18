@@ -1,16 +1,17 @@
 # THE place you set models & parameters. Code reads only from here.
 seed: 42
-device: cpu                     # CPU-only dev box; set to cuda where available
+device: cuda                     # cpu (default: deterministic, replay-safe for the auditable NFR) or cuda
+                                # (OCR=onnxruntime CUDA EP, embed/enhance=torch.cuda; each auto-falls back to cpu)
 
 data:    {root: data/raw, dpi: 200, max_pages: -1}      # -1 = whole corpus
 preprocess: {enabled: true, denoise: true, binarize: true, deskew: true, augment: false}
 enhance: {enabled: true, model: "clahe_denoise", type: "classical", train: false}   # or "unet_small" (from-scratch denoiser)
 layout:  {model: "heuristic:projection", min_block_h: 20, merge_gap: 14}
-ocr:     {model: "rapidocr:PP-OCRv4-onnx", lang: "en", finetune: false, workers: 3}   # pretrained PP-OCRv4 ONNX (paddleocr blocked by paddlepaddle CPU bug)
+ocr:     {model: "rapidocr:PP-OCRv4-onnx", lang: "en", finetune: false, workers: 2}   # pretrained PP-OCRv4 ONNX (paddleocr blocked by paddlepaddle CPU bug)
 embed:   {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384}
 index:   {type: "faiss:hnsw", dir: "data/index", chunk_tokens: 256, overlap: 32}    # HNSW + inner-product (cosine), metadata sidecar in dir
 retrieve: {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true, reranker: "cross-encoder/ms-marco-MiniLM-L6-v2"}   # drive evidence-gated re-search
-agent:   {max_steps: 8, autonomy: "act-with-approval", budget_usd: 0.05}
+agent:   {max_steps: 6, autonomy: "act-then-log", temperature: 0, budget_usd: 0.05}   # temp=0 -> deterministic replay (A1 auditable NFR)
 rl:      {algo: "ppo", train_policy: false}                         # bonus: set true
 serve:   {batch: true}
 deploy:  {target: "hf-spaces"}

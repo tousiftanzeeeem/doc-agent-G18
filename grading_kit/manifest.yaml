@@ -4,24 +4,19 @@
 # ONLY this file; it points to the rest. Build/run scripts and the eval
 # tasks are NAMED here, not copied, so they never go stale.
 
-project_id: ""              # your team id
+project_id: "G18"              
 
 axes:
-  domain: ""                # your corpus subject / real user (see Roster; one per team)
-  data_speciality: ""       # ONE hard property of your corpus you are handed (see Data-Speciality Catalog)
-                            #   e.g. bangla | arabic | code-switching | degraded-scans | multi-column |
-                            #        handwritten | old-orthography | math-notation | dirty-ocr | ...
-                            #   (English is not a speciality; if your corpus is English, pick a data condition.)
-  primary_nfr: ""           # ONE quality you optimise ABOVE baseline (see NFR sheet). Faithful &
-                            #   accurate are REQUIRED of everyone (baseline), so they are NOT choices.
-  nfr_target: ""            # the concrete target you commit to for that NFR, e.g. "p95 latency <= 300ms",
-                            #   "peak RAM <= 2GB", "ECE <= 0.05", "PII recall >= 0.98"
+  domain: "public-health-history"     # scanned annual sanitary reports of colonial Bengal (1889)
+  data_speciality: "unruled-tables+degraded-scans"   # unruled multi-column statistical tables + faded/degraded old scans
+  primary_nfr: "auditable"              # optimised ABOVE baseline (faithful+accurate are baseline)
+  nfr_target: "95% of answers have a completely replayable audit trail"
 
 corpus:
-  path: data/raw/                   # where the scanned page-images live
-  pages: 0                          # total pages  (floor: >= 300)
-  words: 0                          # total words  (floor: >= 60000)
-  provenance: data/provenance.md    # source + licence + counts
+  path: data/raw/                     # scanned page-images (gitignored; built by scripts/get_data.sh)
+  pages: 836                          # total pages  (floor: >= 300)  ✓
+  words: ~180000                      # total words  (floor: >= 60000) ✓ measured at A2 build
+  provenance: data/provenance.md
 
 heldout:
   pages_dir: grading_kit/heldout_pages/   # page-images set aside, never OCR-trained on
