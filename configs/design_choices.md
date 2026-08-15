@@ -1,7 +1,4 @@
 # Per-stage design choices (A2 deliverable)
-
-
-
 Corpus: *Twenty-second Annual Report of the Sanitary Commissioner for Bengal (1889)* — 836 scanned
 pages, 1890 letterpress, Internet Archive item `in.ernet.dli.2015.95111` (public domain).
 Domain: public-health history · Data speciality: **unruled-tables+degraded-scans** · Primary NFR: **auditable
