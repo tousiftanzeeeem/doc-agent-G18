@@ -1,6 +1,6 @@
 HEADER
 ------
-Member name: Tanzim Tousif
+Member name: Tanzeem Tousif
 Student number: 2105071
 Sections led: Stage 2 Layout detection, Stage 3 OCR engine (selection + worker pool), OCR evaluation (char-F1 vs held-out labels), EDA notebook, hooks.py fix, design_choices.md (stages 2-3)
 
