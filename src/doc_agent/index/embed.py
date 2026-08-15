@@ -4,11 +4,6 @@ from __future__ import annotations
 from ..contracts import *  # noqa
 from sentence_transformers import SentenceTransformer
 
-
-def encode(chunks: list[Chunk], cfg: dict):
-    """Embed with cfg['embed']['model']. IMPLEMENT."""
-    raise NotImplementedError("Stage 4: embed")
-
 def _get_model(cfg: dict) -> "SentenceTransformer":
     model_name = cfg["embed"]["model"]
     return SentenceTransformer(model_name)
