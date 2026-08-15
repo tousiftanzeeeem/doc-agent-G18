@@ -1,6 +1,6 @@
 HEADER
 ------
-Member name: Mobsharul Islam Tonmoy
+Member name: Md. Mobasharul Islam Tonmoy
 Student number: 2105076
 Sections led: Stage 0 Frame & configs, Stage 1 Corpus & provenance, Stage 2 Ingest (load -> preprocess -> enhance), data validation & corpus versioning, CI build fixes (uv.lock + runtime deps)
 
